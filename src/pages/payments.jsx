@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase.jsx';
+import { useAuth } from '../lib/auth.jsx';
 
 const Payments = () => {
   const [invoices, setInvoices] = useState([]);
@@ -22,29 +23,41 @@ const Payments = () => {
     payment_method: 'cash'
   });
 
+  const { userType, user } = useAuth();
+
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [userType, user]);
 
   const fetchData = async () => {
     try {
+      let invoicesQuery = supabase.from('invoices').select(`
+        *,
+        patients (first_name, last_name),
+        appointments (appointment_date)
+      `).order('created_at', { ascending: false });
+
+      let transactionsQuery = supabase.from('transactions').select(`
+        *,
+        invoices (invoice_number, patients (first_name, last_name))
+      `).order('transaction_date', { ascending: false });
+
+      // Filter for patients - only show their own invoices
+      if (userType === 'patient') {
+        invoicesQuery = invoicesQuery.eq('patient_id', user.id);
+        transactionsQuery = transactionsQuery.eq('invoices.patient_id', user.id);
+      }
+
       const [invoicesRes, transactionsRes, patientsRes, appointmentsRes] = await Promise.all([
-        supabase.from('invoices').select(`
-          *,
-          patients (first_name, last_name),
-          appointments (appointment_date)
-        `).order('created_at', { ascending: false }),
-        supabase.from('transactions').select(`
-          *,
-          invoices (invoice_number, patients (first_name, last_name))
-        `).order('transaction_date', { ascending: false }),
-        supabase.from('patients').select('id, first_name, last_name').order('first_name'),
-        supabase.from('appointments').select(`
+        invoicesQuery,
+        transactionsQuery,
+        userType === 'admin' ? supabase.from('patients').select('id, first_name, last_name').order('first_name') : { data: [] },
+        userType === 'admin' ? supabase.from('appointments').select(`
           id,
           appointment_date,
           patients (first_name, last_name),
           doctors (first_name, last_name)
-        `).order('appointment_date', { ascending: false })
+        `).order('appointment_date', { ascending: false }) : { data: [] }
       ]);
 
       if (invoicesRes.error) throw invoicesRes.error;
@@ -171,6 +184,16 @@ const Payments = () => {
     online: 'bg-purple-100 text-purple-800'
   };
 
+  const getPageTitle = () => {
+    switch (userType) {
+      case 'patient': return 'My Billing';
+      default: return 'Payments';
+    }
+  };
+
+  const canCreateInvoice = userType === 'admin';
+  const canProcessPayments = userType === 'admin';
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -182,45 +205,78 @@ const Payments = () => {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-900">Payments</h1>
-        <div className="space-x-3">
-          <button
-            onClick={() => setShowInvoiceModal(true)}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            + New Invoice
-          </button>
-        </div>
+        <h1 className="text-2xl font-bold text-gray-900">{getPageTitle()}</h1>
+        {canCreateInvoice && (
+          <div className="space-x-3">
+            <button
+              onClick={() => setShowInvoiceModal(true)}
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              + New Invoice
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Statistics Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-          <div className="text-2xl font-bold text-gray-900">
-            ${invoices.reduce((sum, inv) => sum + (inv.paid_amount || 0), 0).toLocaleString()}
+      {userType === 'admin' && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+            <div className="text-2xl font-bold text-gray-900">
+              ${invoices.reduce((sum, inv) => sum + (inv.paid_amount || 0), 0).toLocaleString()}
+            </div>
+            <div className="text-sm text-gray-600">Total Revenue</div>
           </div>
-          <div className="text-sm text-gray-600">Total Revenue</div>
-        </div>
-        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-          <div className="text-2xl font-bold text-gray-900">
-            ${invoices.reduce((sum, inv) => sum + (inv.total_amount - (inv.paid_amount || 0)), 0).toLocaleString()}
+          <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+            <div className="text-2xl font-bold text-gray-900">
+              ${invoices.reduce((sum, inv) => sum + (inv.total_amount - (inv.paid_amount || 0)), 0).toLocaleString()}
+            </div>
+            <div className="text-sm text-gray-600">Pending Payments</div>
           </div>
-          <div className="text-sm text-gray-600">Pending Payments</div>
+          <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+            <div className="text-2xl font-bold text-gray-900">{invoices.length}</div>
+            <div className="text-sm text-gray-600">Total Invoices</div>
+          </div>
+          <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+            <div className="text-2xl font-bold text-gray-900">{transactions.length}</div>
+            <div className="text-sm text-gray-600">Transactions</div>
+          </div>
         </div>
-        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-          <div className="text-2xl font-bold text-gray-900">{invoices.length}</div>
-          <div className="text-sm text-gray-600">Total Invoices</div>
+      )}
+
+      {/* Patient Summary */}
+      {userType === 'patient' && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <h2 className="text-lg font-semibold mb-4 text-gray-900">Billing Summary</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="text-center">
+              <div className="text-2xl font-bold text-green-600">
+                ${invoices.filter(inv => inv.status === 'paid').reduce((sum, inv) => sum + (inv.paid_amount || 0), 0).toLocaleString()}
+              </div>
+              <div className="text-sm text-gray-600">Paid</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-yellow-600">
+                ${invoices.filter(inv => inv.status !== 'paid').reduce((sum, inv) => sum + (inv.total_amount - (inv.paid_amount || 0)), 0).toLocaleString()}
+              </div>
+              <div className="text-sm text-gray-600">Pending</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-gray-900">
+                {invoices.filter(inv => inv.status !== 'paid').length}
+              </div>
+              <div className="text-sm text-gray-600">Pending Invoices</div>
+            </div>
+          </div>
         </div>
-        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
-          <div className="text-2xl font-bold text-gray-900">{transactions.length}</div>
-          <div className="text-sm text-gray-600">Transactions</div>
-        </div>
-      </div>
+      )}
 
       {/* Invoices Table */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900">Invoices</h2>
+          <h2 className="text-lg font-semibold text-gray-900">
+            {userType === 'patient' ? 'My Invoices' : 'Invoices'}
+          </h2>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full">
@@ -229,9 +285,11 @@ const Payments = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Invoice
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Patient
-                </th>
+                {userType === 'admin' && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Patient
+                  </th>
+                )}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Amount
                 </th>
@@ -244,9 +302,11 @@ const Payments = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Due Date
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>
+                {canProcessPayments && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -255,9 +315,11 @@ const Payments = () => {
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                     {invoice.invoice_number}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {invoice.patients?.first_name} {invoice.patients?.last_name}
-                  </td>
+                  {userType === 'admin' && (
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {invoice.patients?.first_name} {invoice.patients?.last_name}
+                    </td>
+                  )}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                     ${invoice.total_amount}
                   </td>
@@ -272,22 +334,24 @@ const Payments = () => {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                     {invoice.due_date ? new Date(invoice.due_date).toLocaleDateString() : 'N/A'}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                    {invoice.status !== 'paid' && (
-                      <button
-                        onClick={() => openPaymentModal(invoice)}
-                        className="text-blue-600 hover:text-blue-900"
-                      >
-                        Receive Payment
-                      </button>
-                    )}
-                  </td>
+                  {canProcessPayments && (
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                      {invoice.status !== 'paid' && (
+                        <button
+                          onClick={() => openPaymentModal(invoice)}
+                          className="text-blue-600 hover:text-blue-900"
+                        >
+                          Receive Payment
+                        </button>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
               {invoices.length === 0 && (
                 <tr>
-                  <td colSpan="7" className="px-6 py-4 text-center text-sm text-gray-500">
-                    No invoices found. Create your first invoice!
+                  <td colSpan={userType === 'admin' ? 7 : 6} className="px-6 py-4 text-center text-sm text-gray-500">
+                    No invoices found.
                   </td>
                 </tr>
               )}
@@ -296,76 +360,78 @@ const Payments = () => {
         </div>
       </div>
 
-      {/* Transactions Table */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900">Recent Transactions</h2>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Date
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Invoice
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Patient
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Amount
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Method
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Status
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {transactions.slice(0, 10).map((transaction) => (
-                <tr key={transaction.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {new Date(transaction.transaction_date).toLocaleDateString()}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {transaction.invoices?.invoice_number}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {transaction.invoices?.patients?.first_name} {transaction.invoices?.patients?.last_name}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    ${transaction.amount}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${paymentMethodColors[transaction.payment_method] || 'bg-gray-100 text-gray-800'}`}>
-                      {transaction.payment_method}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${transaction.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                      {transaction.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-              {transactions.length === 0 && (
+      {/* Transactions Table (Admin only) */}
+      {userType === 'admin' && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-lg font-semibold text-gray-900">Recent Transactions</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50">
                 <tr>
-                  <td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">
-                    No transactions found.
-                  </td>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Date
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Invoice
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Patient
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Amount
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Method
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Status
+                  </th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {transactions.slice(0, 10).map((transaction) => (
+                  <tr key={transaction.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {new Date(transaction.transaction_date).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {transaction.invoices?.invoice_number}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {transaction.invoices?.patients?.first_name} {transaction.invoices?.patients?.last_name}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      ${transaction.amount}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${paymentMethodColors[transaction.payment_method] || 'bg-gray-100 text-gray-800'}`}>
+                        {transaction.payment_method}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${transaction.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                        {transaction.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                {transactions.length === 0 && (
+                  <tr>
+                    <td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">
+                      No transactions found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Add Invoice Modal */}
-      {showInvoiceModal && (
+      {/* Add Invoice Modal (Admin only) */}
+      {showInvoiceModal && userType === 'admin' && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg max-w-md w-full p-6">
             <h2 className="text-xl font-bold mb-4">Create New Invoice</h2>
@@ -450,8 +516,8 @@ const Payments = () => {
         </div>
       )}
 
-      {/* Process Payment Modal */}
-      {showPaymentModal && selectedInvoice && (
+      {/* Process Payment Modal (Admin only) */}
+      {showPaymentModal && selectedInvoice && userType === 'admin' && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg max-w-md w-full p-6">
             <h2 className="text-xl font-bold mb-4">Process Payment</h2>

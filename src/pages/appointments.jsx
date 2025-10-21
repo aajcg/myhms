@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase.jsx';
+import { useAuth } from '../lib/auth.jsx';
 
 const Appointments = () => {
   const [appointments, setAppointments] = useState([]);
@@ -15,15 +16,21 @@ const Appointments = () => {
     notes: ''
   });
 
+  const { user, userType } = useAuth();
+
   useEffect(() => {
     fetchAppointments();
-    fetchPatients();
-    fetchDoctors();
-  }, []);
+    if (userType === 'admin') {
+      fetchPatients();
+      fetchDoctors();
+    } else if (userType === 'doctor') {
+      fetchDoctors();
+    }
+  }, [user, userType]);
 
   const fetchAppointments = async () => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('appointments')
         .select(`
           *,
@@ -31,6 +38,15 @@ const Appointments = () => {
           doctors (first_name, last_name, specialization)
         `)
         .order('appointment_date', { ascending: false });
+
+      // Filter based on user type
+      if (userType === 'doctor') {
+        query = query.eq('doctor_id', user.id);
+      } else if (userType === 'patient') {
+        query = query.eq('patient_id', user.id);
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
       setAppointments(data || []);
@@ -102,16 +118,20 @@ const Appointments = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      // First create the appointment
+      // For doctors, auto-assign themselves
+      const appointmentData = userType === 'doctor' 
+        ? { ...formData, doctor_id: user.id }
+        : formData;
+
       const { data, error } = await supabase
         .from('appointments')
-        .insert([formData])
-        .select(); // This returns the created appointment
+        .insert([appointmentData])
+        .select();
 
       if (error) throw error;
       
-      // Then create invoice for the appointment
-      if (data && data[0]) {
+      // Create invoice for the appointment (admin only)
+      if (userType === 'admin' && data && data[0]) {
         await createInvoiceForAppointment(data[0].id, formData.patient_id, formData.doctor_id);
       }
 
@@ -123,7 +143,7 @@ const Appointments = () => {
         reason: '',
         notes: ''
       });
-      fetchAppointments(); // Refresh the list
+      fetchAppointments();
     } catch (error) {
       console.error('Error creating appointment:', error);
       alert('Error creating appointment: ' + error.message);
@@ -145,6 +165,16 @@ const Appointments = () => {
     no_show: 'bg-yellow-100 text-yellow-800'
   };
 
+  const getPageTitle = () => {
+    switch (userType) {
+      case 'doctor': return 'My Appointments';
+      case 'patient': return 'My Appointments';
+      default: return 'Appointments';
+    }
+  };
+
+  const canCreateAppointment = userType === 'admin' || userType === 'patient';
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -156,17 +186,19 @@ const Appointments = () => {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-900">Appointments</h1>
-        <button
-          onClick={() => setShowModal(true)}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-          disabled={patients.length === 0 || doctors.length === 0}
-        >
-          + New Appointment
-        </button>
+        <h1 className="text-2xl font-bold text-gray-900">{getPageTitle()}</h1>
+        {canCreateAppointment && (
+          <button
+            onClick={() => setShowModal(true)}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+            disabled={patients.length === 0 || doctors.length === 0}
+          >
+            + New Appointment
+          </button>
+        )}
       </div>
 
-      {patients.length === 0 && (
+      {userType === 'admin' && patients.length === 0 && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
           <p className="text-yellow-800">
             <strong>Note:</strong> You need to create at least one patient before creating appointments.
@@ -174,7 +206,7 @@ const Appointments = () => {
         </div>
       )}
 
-      {doctors.length === 0 && (
+      {userType === 'admin' && doctors.length === 0 && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
           <p className="text-yellow-800">
             <strong>Note:</strong> You need to create at least one doctor before creating appointments.
@@ -188,12 +220,16 @@ const Appointments = () => {
           <table className="w-full">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Patient
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Doctor
-                </th>
+                {userType !== 'patient' && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Patient
+                  </th>
+                )}
+                {userType !== 'doctor' && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Doctor
+                  </th>
+                )}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Date & Time
                 </th>
@@ -208,19 +244,23 @@ const Appointments = () => {
             <tbody className="bg-white divide-y divide-gray-200">
               {appointments.map((appointment) => (
                 <tr key={appointment.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900">
-                      {appointment.patients?.first_name} {appointment.patients?.last_name}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900">
-                      Dr. {appointment.doctors?.first_name} {appointment.doctors?.last_name}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      {appointment.doctors?.specialization}
-                    </div>
-                  </td>
+                  {userType !== 'patient' && (
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm font-medium text-gray-900">
+                        {appointment.patients?.first_name} {appointment.patients?.last_name}
+                      </div>
+                    </td>
+                  )}
+                  {userType !== 'doctor' && (
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">
+                        Dr. {appointment.doctors?.first_name} {appointment.doctors?.last_name}
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        {appointment.doctors?.specialization}
+                      </div>
+                    </td>
+                  )}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                     {new Date(appointment.appointment_date).toLocaleString()}
                   </td>
@@ -236,8 +276,8 @@ const Appointments = () => {
               ))}
               {appointments.length === 0 && (
                 <tr>
-                  <td colSpan="5" className="px-6 py-4 text-center text-sm text-gray-500">
-                    No appointments found. Create your first appointment!
+                  <td colSpan={userType === 'admin' ? 5 : userType === 'doctor' ? 4 : 4} className="px-6 py-4 text-center text-sm text-gray-500">
+                    No appointments found.
                   </td>
                 </tr>
               )}
@@ -252,41 +292,65 @@ const Appointments = () => {
           <div className="bg-white rounded-lg max-w-md w-full p-6">
             <h2 className="text-xl font-bold mb-4">New Appointment</h2>
             <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Patient *</label>
-                <select
-                  name="patient_id"
-                  value={formData.patient_id}
-                  onChange={handleInputChange}
-                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                  required
-                >
-                  <option value="">Select Patient</option>
-                  {patients.map(patient => (
-                    <option key={patient.id} value={patient.id}>
-                      {patient.first_name} {patient.last_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Doctor *</label>
-                <select
-                  name="doctor_id"
-                  value={formData.doctor_id}
-                  onChange={handleInputChange}
-                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                  required
-                >
-                  <option value="">Select Doctor</option>
-                  {doctors.map(doctor => (
-                    <option key={doctor.id} value={doctor.id}>
-                      Dr. {doctor.first_name} {doctor.last_name} - {doctor.specialization}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {userType === 'admin' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Patient *</label>
+                    <select
+                      name="patient_id"
+                      value={formData.patient_id}
+                      onChange={handleInputChange}
+                      className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      required
+                    >
+                      <option value="">Select Patient</option>
+                      {patients.map(patient => (
+                        <option key={patient.id} value={patient.id}>
+                          {patient.first_name} {patient.last_name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Doctor *</label>
+                    <select
+                      name="doctor_id"
+                      value={formData.doctor_id}
+                      onChange={handleInputChange}
+                      className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      required
+                    >
+                      <option value="">Select Doctor</option>
+                      {doctors.map(doctor => (
+                        <option key={doctor.id} value={doctor.id}>
+                          Dr. {doctor.first_name} {doctor.last_name} - {doctor.specialization}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {userType === 'patient' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Doctor *</label>
+                  <select
+                    name="doctor_id"
+                    value={formData.doctor_id}
+                    onChange={handleInputChange}
+                    className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    required
+                  >
+                    <option value="">Select Doctor</option>
+                    {doctors.map(doctor => (
+                      <option key={doctor.id} value={doctor.id}>
+                        Dr. {doctor.first_name} {doctor.last_name} - {doctor.specialization}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700">Date & Time *</label>

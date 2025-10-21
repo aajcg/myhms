@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase.jsx';
+import { useAuth } from '../lib/auth.jsx';
 
 const Doctors = () => {
   const [doctors, setDoctors] = useState([]);
@@ -18,16 +19,25 @@ const Doctors = () => {
     status: 'active'
   });
 
+  const { userType, user } = useAuth();
+
   useEffect(() => {
     fetchDoctors();
-  }, []);
+  }, [userType, user]);
 
   const fetchDoctors = async () => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('doctors')
         .select('*')
-        .order('created_at', { ascending: false });
+        .order('first_name');
+
+      // If doctor, only show their own profile
+      if (userType === 'doctor') {
+        query = query.eq('id', user.id);
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
       setDoctors(data || []);
@@ -64,7 +74,7 @@ const Doctors = () => {
         consultation_fee: '',
         status: 'active'
       });
-      fetchDoctors(); // Refresh the list
+      fetchDoctors();
     } catch (error) {
       console.error('Error creating doctor:', error);
       alert('Error creating doctor: ' + error.message);
@@ -85,6 +95,15 @@ const Doctors = () => {
     on_leave: 'bg-yellow-100 text-yellow-800'
   };
 
+  const getPageTitle = () => {
+    switch (userType) {
+      case 'doctor': return 'My Profile';
+      default: return 'Doctors';
+    }
+  };
+
+  const canCreateDoctor = userType === 'admin';
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -96,13 +115,15 @@ const Doctors = () => {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-900">Doctors</h1>
-        <button
-          onClick={() => setShowModal(true)}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          + New Doctor
-        </button>
+        <h1 className="text-2xl font-bold text-gray-900">{getPageTitle()}</h1>
+        {canCreateDoctor && (
+          <button
+            onClick={() => setShowModal(true)}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            + New Doctor
+          </button>
+        )}
       </div>
 
       {/* Doctors Table */}
@@ -120,18 +141,24 @@ const Doctors = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Department
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Experience
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Consultation Fee
-                </th>
+                {userType === 'admin' && (
+                  <>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Experience
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Consultation Fee
+                    </th>
+                  </>
+                )}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Status
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Contact
-                </th>
+                {userType === 'admin' && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Contact
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -141,7 +168,9 @@ const Doctors = () => {
                     <div className="text-sm font-medium text-gray-900">
                       Dr. {doctor.first_name} {doctor.last_name}
                     </div>
-                    <div className="text-sm text-gray-500">{doctor.license_number}</div>
+                    {userType === 'admin' && (
+                      <div className="text-sm text-gray-500">{doctor.license_number}</div>
+                    )}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                     {doctor.specialization}
@@ -149,27 +178,33 @@ const Doctors = () => {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                     {doctor.department}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {doctor.experience_years} years
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    ${doctor.consultation_fee}
-                  </td>
+                  {userType === 'admin' && (
+                    <>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {doctor.experience_years} years
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        ${doctor.consultation_fee}
+                      </td>
+                    </>
+                  )}
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${statusColors[doctor.status] || 'bg-gray-100 text-gray-800'}`}>
                       {doctor.status}
                     </span>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900">{doctor.email}</div>
-                    <div className="text-sm text-gray-500">{doctor.phone}</div>
-                  </td>
+                  {userType === 'admin' && (
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">{doctor.email}</div>
+                      <div className="text-sm text-gray-500">{doctor.phone}</div>
+                    </td>
+                  )}
                 </tr>
               ))}
               {doctors.length === 0 && (
                 <tr>
-                  <td colSpan="7" className="px-6 py-4 text-center text-sm text-gray-500">
-                    No doctors found. Create your first doctor!
+                  <td colSpan={userType === 'admin' ? 7 : 4} className="px-6 py-4 text-center text-sm text-gray-500">
+                    No doctors found.
                   </td>
                 </tr>
               )}
@@ -178,8 +213,8 @@ const Doctors = () => {
         </div>
       </div>
 
-      {/* Add Doctor Modal */}
-      {showModal && (
+      {/* Add Doctor Modal (Admin only) */}
+      {showModal && userType === 'admin' && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6">

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase.jsx';
+import { useAuth } from '../lib/auth.jsx';
 
 const Departments = () => {
   const [departments, setDepartments] = useState([]);
@@ -13,9 +14,15 @@ const Departments = () => {
     head_doctor_id: ''
   });
 
+  const { userType } = useAuth();
+
   useEffect(() => {
-    fetchData();
-  }, []);
+    if (userType === 'admin') {
+      fetchData();
+    } else {
+      setLoading(false);
+    }
+  }, [userType]);
 
   const fetchData = async () => {
     try {
@@ -119,6 +126,17 @@ const Departments = () => {
     return (
       <div className="flex justify-center items-center h-64">
         <div className="loading-spinner"></div>
+      </div>
+    );
+  }
+
+  if (userType !== 'admin') {
+    return (
+      <div className="p-6">
+        <h1 className="text-2xl font-bold text-gray-900 mb-6">Departments</h1>
+        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+          <p className="text-gray-600">Department management is only available to administrators.</p>
+        </div>
       </div>
     );
   }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase.jsx';
+import { useAuth } from '../lib/auth.jsx';
 
 const Inventory = () => {
   const [inventory, setInventory] = useState([]);
@@ -15,16 +16,25 @@ const Inventory = () => {
     reorder_level: '10'
   });
 
+  const { userType } = useAuth();
+
   useEffect(() => {
     fetchInventory();
-  }, []);
+  }, [userType]);
 
   const fetchInventory = async () => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('inventory')
         .select('*')
         .order('item_name');
+
+      // Pharmacists only see medications
+      if (userType === 'pharmacist') {
+        query = query.eq('category', 'Medication');
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
       setInventory(data || []);
@@ -46,7 +56,6 @@ const Inventory = () => {
       };
 
       if (editingItem) {
-        // Update existing item
         const { error } = await supabase
           .from('inventory')
           .update(itemData)
@@ -54,7 +63,6 @@ const Inventory = () => {
 
         if (error) throw error;
       } else {
-        // Create new item
         const { error } = await supabase
           .from('inventory')
           .insert([itemData]);
@@ -147,6 +155,15 @@ const Inventory = () => {
     'Other'
   ];
 
+  const getPageTitle = () => {
+    switch (userType) {
+      case 'pharmacist': return 'Pharmacy Inventory';
+      default: return 'Inventory Management';
+    }
+  };
+
+  const canManageInventory = userType === 'admin' || userType === 'pharmacist';
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -161,13 +178,15 @@ const Inventory = () => {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-900">Inventory Management</h1>
-        <button
-          onClick={() => setShowModal(true)}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          + Add Item
-        </button>
+        <h1 className="text-2xl font-bold text-gray-900">{getPageTitle()}</h1>
+        {canManageInventory && (
+          <button
+            onClick={() => setShowModal(true)}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            + Add Item
+          </button>
+        )}
       </div>
 
       {/* Statistics Cards */}
@@ -238,21 +257,29 @@ const Inventory = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Quantity
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Unit Price
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Total Value
-                </th>
+                {userType === 'admin' && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Unit Price
+                  </th>
+                )}
+                {userType === 'admin' && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Total Value
+                  </th>
+                )}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Status
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Supplier
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>
+                {userType === 'admin' && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Supplier
+                  </th>
+                )}
+                {canManageInventory && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -271,41 +298,49 @@ const Inventory = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       {item.quantity}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {item.unit_price ? `$${item.unit_price}` : 'N/A'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      ${totalValue.toLocaleString()}
-                    </td>
+                    {userType === 'admin' && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {item.unit_price ? `$${item.unit_price}` : 'N/A'}
+                      </td>
+                    )}
+                    {userType === 'admin' && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        ${totalValue.toLocaleString()}
+                      </td>
+                    )}
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${stockStatus.color}`}>
                         {stockStatus.text}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-900">
-                      {item.supplier || 'N/A'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
-                      <button
-                        onClick={() => handleEdit(item)}
-                        className="text-blue-600 hover:text-blue-900"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => handleDelete(item.id)}
-                        className="text-red-600 hover:text-red-900"
-                      >
-                        Delete
-                      </button>
-                    </td>
+                    {userType === 'admin' && (
+                      <td className="px-6 py-4 text-sm text-gray-900">
+                        {item.supplier || 'N/A'}
+                      </td>
+                    )}
+                    {canManageInventory && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                        <button
+                          onClick={() => handleEdit(item)}
+                          className="text-blue-600 hover:text-blue-900"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDelete(item.id)}
+                          className="text-red-600 hover:text-red-900"
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
               {inventory.length === 0 && (
                 <tr>
-                  <td colSpan="8" className="px-6 py-4 text-center text-sm text-gray-500">
-                    No inventory items found. Add your first item!
+                  <td colSpan={userType === 'admin' ? 8 : 5} className="px-6 py-4 text-center text-sm text-gray-500">
+                    No inventory items found.
                   </td>
                 </tr>
               )}
@@ -315,7 +350,7 @@ const Inventory = () => {
       </div>
 
       {/* Add/Edit Inventory Modal */}
-      {showModal && (
+      {showModal && canManageInventory && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6">

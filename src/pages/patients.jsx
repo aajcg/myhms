@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase.jsx';
+import { useAuth } from '../lib/auth.jsx';
 
 const Patients = () => {
   const [patients, setPatients] = useState([]);
@@ -16,6 +17,8 @@ const Patients = () => {
     emergency_contact: '',
     blood_type: ''
   });
+
+  const { userType } = useAuth();
 
   useEffect(() => {
     fetchPatients();
@@ -58,7 +61,7 @@ const Patients = () => {
         emergency_contact: '',
         blood_type: ''
       });
-      fetchPatients(); // Refresh the list
+      fetchPatients();
     } catch (error) {
       console.error('Error creating patient:', error);
       alert('Error creating patient: ' + error.message);
@@ -73,6 +76,14 @@ const Patients = () => {
     }));
   };
 
+  const getPageTitle = () => {
+    switch (userType) {
+      case 'doctor': return 'My Patients';
+      case 'pharmacist': return 'Patients';
+      default: return 'Patients';
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -84,13 +95,15 @@ const Patients = () => {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-900">Patients</h1>
-        <button
-          onClick={() => setShowModal(true)}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          + New Patient
-        </button>
+        <h1 className="text-2xl font-bold text-gray-900">{getPageTitle()}</h1>
+        {userType === 'admin' && (
+          <button
+            onClick={() => setShowModal(true)}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            + New Patient
+          </button>
+        )}
       </div>
 
       {/* Patients Table */}
@@ -111,12 +124,11 @@ const Patients = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Gender
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Blood Type
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Emergency Contact
-                </th>
+                {userType === 'admin' && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Blood Type
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -137,18 +149,17 @@ const Patients = () => {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                     {patient.gender || 'N/A'}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {patient.blood_type || 'N/A'}
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-900">
-                    {patient.emergency_contact || 'N/A'}
-                  </td>
+                  {userType === 'admin' && (
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {patient.blood_type || 'N/A'}
+                    </td>
+                  )}
                 </tr>
               ))}
               {patients.length === 0 && (
                 <tr>
-                  <td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">
-                    No patients found. Create your first patient!
+                  <td colSpan={userType === 'admin' ? 5 : 4} className="px-6 py-4 text-center text-sm text-gray-500">
+                    No patients found.
                   </td>
                 </tr>
               )}
@@ -157,8 +168,8 @@ const Patients = () => {
         </div>
       </div>
 
-      {/* Add Patient Modal */}
-      {showModal && (
+      {/* Add Patient Modal (Admin only) */}
+      {showModal && userType === 'admin' && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6">

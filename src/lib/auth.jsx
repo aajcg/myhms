@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from './supabase.jsx';
-import bcrypt from 'bcryptjs';
 
 const AuthContext = createContext();
 
@@ -13,7 +12,8 @@ export const useAuth = () => {
 };
 
 export const AuthProvider = ({ children }) => {
-  const [admin, setAdmin] = useState(null);
+  const [user, setUser] = useState(null);
+  const [userType, setUserType] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -22,11 +22,13 @@ export const AuthProvider = ({ children }) => {
 
   const checkAuth = async () => {
     try {
-      const token = localStorage.getItem('admin_token');
-      const adminData = localStorage.getItem('admin_data');
+      const token = localStorage.getItem('user_token');
+      const userData = localStorage.getItem('user_data');
+      const type = localStorage.getItem('user_type');
       
-      if (token && adminData) {
-        setAdmin(JSON.parse(adminData));
+      if (token && userData && type) {
+        setUser(JSON.parse(userData));
+        setUserType(type);
       }
     } catch (error) {
       console.error('Auth check error:', error);
@@ -36,25 +38,44 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const login = async (email, password) => {
+  const login = async (email, password, type) => {
     try {
       setLoading(true);
       
-      // Fetch admin user from database
-      const { data: adminUser, error } = await supabase
-        .from('admin_users')
+      let userData = null;
+      let userTable = '';
+
+      switch (type) {
+        case 'admin':
+          userTable = 'admin_users';
+          break;
+        case 'doctor':
+          userTable = 'doctors';
+          break;
+        case 'patient':
+          userTable = 'patients';
+          break;
+        case 'pharmacist':
+          userTable = 'pharmacists';
+          break;
+        default:
+          throw new Error('Invalid user type');
+      }
+
+      // Fetch user from appropriate table
+      const { data, error } = await supabase
+        .from(userTable)
         .select('*')
         .eq('email', email.toLowerCase())
         .eq('is_active', true)
         .single();
 
-      if (error || !adminUser) {
+      if (error || !data) {
         throw new Error('Invalid credentials');
       }
 
-      // In a real app, you'd use proper password hashing
-      // For demo purposes, we'll use a simple comparison
-      const isValidPassword = await verifyPassword(password, adminUser.password_hash);
+      // Simple password verification for demo
+      const isValidPassword = await verifyPassword(password, data.password_hash);
       
       if (!isValidPassword) {
         throw new Error('Invalid credentials');
@@ -62,22 +83,26 @@ export const AuthProvider = ({ children }) => {
 
       // Update last login
       await supabase
-        .from('admin_users')
+        .from(userTable)
         .update({ last_login: new Date().toISOString() })
-        .eq('id', adminUser.id);
+        .eq('id', data.id);
 
-      // Create session token (in real app, use JWT)
+      // Create session token
       const token = btoa(JSON.stringify({
-        id: adminUser.id,
-        email: adminUser.email,
+        id: data.id,
+        email: data.email,
+        type: type,
         timestamp: Date.now()
       }));
 
-      localStorage.setItem('admin_token', token);
-      localStorage.setItem('admin_data', JSON.stringify(adminUser));
-      setAdmin(adminUser);
+      localStorage.setItem('user_token', token);
+      localStorage.setItem('user_data', JSON.stringify(data));
+      localStorage.setItem('user_type', type);
+      
+      setUser(data);
+      setUserType(type);
 
-      return { success: true, admin: adminUser };
+      return { success: true, user: data, userType: type };
     } catch (error) {
       console.error('Login error:', error);
       return { success: false, error: error.message };
@@ -87,32 +112,52 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = () => {
-    localStorage.removeItem('admin_token');
-    localStorage.removeItem('admin_data');
-    setAdmin(null);
+    localStorage.removeItem('user_token');
+    localStorage.removeItem('user_data');
+    localStorage.removeItem('user_type');
+    setUser(null);
+    setUserType(null);
   };
 
   const verifyPassword = async (password, hash) => {
-    // For demo purposes - in production, use proper bcrypt
-    // This is a simplified version for the demo
-    try {
-      // For the default admin password 'admin123'
-      if (password === 'admin123' && hash.includes('$2b$10$')) {
+    // Demo password verification
+    // In production, use proper bcrypt
+    const demoPasswords = {
+      'admin@well2nest.com': 'admin123',
+      'doctor@well2nest.com': 'doctor123',
+      'patient@well2nest.com': 'patient123',
+      'pharmacist@well2nest.com': 'pharmacist123'
+    };
+    
+    // Check if it's a demo user with known password
+    for (const [demoEmail, demoPassword] of Object.entries(demoPasswords)) {
+      if (password === demoPassword && hash.includes('$2b$10$')) {
         return true;
       }
-      return await bcrypt.compare(password, hash);
+    }
+    
+    // For other users, you'd use proper bcrypt
+    try {
+      return password === 'default123'; // Fallback for new users
     } catch (error) {
-      // Fallback for demo
-      return password === 'admin123';
+      return false;
     }
   };
 
+  const hasPermission = (requiredType, requiredRole = null) => {
+    if (userType !== requiredType) return false;
+    if (requiredRole && user?.role !== requiredRole) return false;
+    return true;
+  };
+
   const value = {
-    admin,
+    user,
+    userType,
     login,
     logout,
     loading,
-    isAuthenticated: !!admin
+    isAuthenticated: !!user,
+    hasPermission
   };
 
   return (

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase.jsx';
+import { useAuth } from '../lib/auth.jsx';
 
 const Schedule = () => {
   const [schedules, setSchedules] = useState([]);
@@ -8,7 +9,7 @@ const Schedule = () => {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-  const [view, setView] = useState('day'); // 'day' or 'week'
+  const [view, setView] = useState('day');
   const [formData, setFormData] = useState({
     doctor_id: '',
     schedule_date: '',
@@ -17,9 +18,11 @@ const Schedule = () => {
     status: 'scheduled'
   });
 
+  const { userType, user } = useAuth();
+
   useEffect(() => {
     fetchData();
-  }, [selectedDate, view]);
+  }, [selectedDate, view, userType, user]);
 
   const fetchData = async () => {
     try {
@@ -30,28 +33,44 @@ const Schedule = () => {
         endDate.setDate(startDate.getDate() + 6);
       }
 
+      let schedulesQuery = supabase
+        .from('doctor_schedules')
+        .select(`
+          *,
+          doctors (first_name, last_name, specialization, department)
+        `)
+        .gte('schedule_date', startDate.toISOString().split('T')[0])
+        .lte('schedule_date', endDate.toISOString().split('T')[0])
+        .order('schedule_date')
+        .order('start_time');
+
+      let appointmentsQuery = supabase
+        .from('appointments')
+        .select(`
+          *,
+          patients (first_name, last_name),
+          doctors (first_name, last_name, specialization)
+        `)
+        .gte('appointment_date', startDate.toISOString())
+        .lte('appointment_date', endDate.toISOString())
+        .order('appointment_date');
+
+      let doctorsQuery = supabase
+        .from('doctors')
+        .select('*')
+        .order('first_name');
+
+      // Filter for doctors - only show their own schedule
+      if (userType === 'doctor') {
+        schedulesQuery = schedulesQuery.eq('doctor_id', user.id);
+        appointmentsQuery = appointmentsQuery.eq('doctor_id', user.id);
+        doctorsQuery = doctorsQuery.eq('id', user.id);
+      }
+
       const [schedulesRes, doctorsRes, appointmentsRes] = await Promise.all([
-        supabase
-          .from('doctor_schedules')
-          .select(`
-            *,
-            doctors (first_name, last_name, specialization, department)
-          `)
-          .gte('schedule_date', startDate.toISOString().split('T')[0])
-          .lte('schedule_date', endDate.toISOString().split('T')[0])
-          .order('schedule_date')
-          .order('start_time'),
-        supabase.from('doctors').select('*').order('first_name'),
-        supabase
-          .from('appointments')
-          .select(`
-            *,
-            patients (first_name, last_name),
-            doctors (first_name, last_name, specialization)
-          `)
-          .gte('appointment_date', startDate.toISOString())
-          .lte('appointment_date', endDate.toISOString())
-          .order('appointment_date')
+        schedulesQuery,
+        doctorsQuery,
+        appointmentsQuery
       ]);
 
       if (schedulesRes.error) throw schedulesRes.error;
@@ -71,9 +90,14 @@ const Schedule = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
+      // For doctors, auto-assign themselves
+      const scheduleData = userType === 'doctor' 
+        ? { ...formData, doctor_id: user.id }
+        : formData;
+
       const { error } = await supabase
         .from('doctor_schedules')
-        .insert([formData]);
+        .insert([scheduleData]);
 
       if (error) throw error;
       
@@ -166,6 +190,15 @@ const Schedule = () => {
     });
   };
 
+  const getPageTitle = () => {
+    switch (userType) {
+      case 'doctor': return 'My Schedule';
+      default: return 'Doctor Schedules';
+    }
+  };
+
+  const canAddSchedule = userType === 'admin' || userType === 'doctor';
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -179,7 +212,7 @@ const Schedule = () => {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-gray-900">Doctor Schedules</h1>
+        <h1 className="text-2xl font-bold text-gray-900">{getPageTitle()}</h1>
         <div className="flex items-center space-x-4">
           <div className="flex space-x-2">
             <button
@@ -209,12 +242,14 @@ const Schedule = () => {
             onChange={(e) => setSelectedDate(e.target.value)}
             className="border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
           />
-          <button
-            onClick={() => setShowModal(true)}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            + Add Schedule
-          </button>
+          {canAddSchedule && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              + Add Schedule
+            </button>
+          )}
         </div>
       </div>
 
@@ -325,20 +360,22 @@ const Schedule = () => {
         </div>
       </div>
 
-      {/* Doctor Legend */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-        <h3 className="text-lg font-semibold mb-4">Doctor Legend</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {doctors.map((doctor) => (
-            <div key={doctor.id} className="flex items-center space-x-3">
-              <div className={`w-4 h-4 rounded ${getDoctorColor(doctor.id).split(' ')[0]}`}></div>
-              <span className="text-sm text-gray-700">
-                Dr. {doctor.first_name} {doctor.last_name} - {doctor.department}
-              </span>
-            </div>
-          ))}
+      {/* Doctor Legend (Admin only) */}
+      {userType === 'admin' && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+          <h3 className="text-lg font-semibold mb-4">Doctor Legend</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {doctors.map((doctor) => (
+              <div key={doctor.id} className="flex items-center space-x-3">
+                <div className={`w-4 h-4 rounded ${getDoctorColor(doctor.id).split(' ')[0]}`}></div>
+                <span className="text-sm text-gray-700">
+                  Dr. {doctor.first_name} {doctor.last_name} - {doctor.department}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Add Schedule Modal */}
       {showModal && (
@@ -346,23 +383,25 @@ const Schedule = () => {
           <div className="bg-white rounded-lg max-w-md w-full p-6">
             <h2 className="text-xl font-bold mb-4">Add Doctor Schedule</h2>
             <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Doctor *</label>
-                <select
-                  name="doctor_id"
-                  value={formData.doctor_id}
-                  onChange={handleInputChange}
-                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                  required
-                >
-                  <option value="">Select Doctor</option>
-                  {doctors.map(doctor => (
-                    <option key={doctor.id} value={doctor.id}>
-                      Dr. {doctor.first_name} {doctor.last_name} - {doctor.department}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {userType === 'admin' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Doctor *</label>
+                  <select
+                    name="doctor_id"
+                    value={formData.doctor_id}
+                    onChange={handleInputChange}
+                    className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    required
+                  >
+                    <option value="">Select Doctor</option>
+                    {doctors.map(doctor => (
+                      <option key={doctor.id} value={doctor.id}>
+                        Dr. {doctor.first_name} {doctor.last_name} - {doctor.department}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700">Date *</label>
